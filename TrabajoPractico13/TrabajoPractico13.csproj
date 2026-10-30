@@ -68,8 +68,24 @@
     <Compile Include="Form1.Designer.cs">
       <DependentUpon>Form1.cs</DependentUpon>
     </Compile>
+    <Compile Include="DiagramaHorno.cs">
+      <SubType>Component</SubType>
+    </Compile>
+    <Compile Include="DatosPLC.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Include="DatosPLC.Designer.cs">
+      <DependentUpon>DatosPLC.cs</DependentUpon>
+    </Compile>
+    <Compile Include="MapaDB.cs" />
+    <Compile Include="Piloto.cs">
+      <SubType>Component</SubType>
+    </Compile>
     <Compile Include="Program.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
+    <EmbeddedResource Include="DatosPLC.resx">
+      <DependentUpon>DatosPLC.cs</DependentUpon>
+    </EmbeddedResource>
     <EmbeddedResource Include="Form1.resx">
       <DependentUpon>Form1.cs</DependentUpon>
     </EmbeddedResource>

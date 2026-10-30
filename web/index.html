@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<!--
+=====================================================================
+ TP Automatización Industrial - PLC S7-1200 + IoT
+ PÁGINA WEB DE MONITOREO Y CONTROL
+
+ Partes de este archivo:
+   1) <style>   -> cómo se ve (colores, tamaños). No hace falta tocarlo.
+   2) <body>    -> qué elementos hay en pantalla (indicadores, botones).
+   3) <script>  -> el PROGRAMA: lee el PLC y le manda comandos.
+
+ Esta página NO habla directamente con el PLC: le pide los datos a
+ servidor.py usando dos "direcciones" (API):
+   GET  /api/estado    -> devuelve el DB del PLC en formato JSON
+   POST /api/escribir  -> escribe una variable del DB
+=====================================================================
+-->
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tanque IoT - S7-1200</title>
+
+<!-- ====================== 1) ESTILO ====================== -->
+<style>
+  body { font-family: Arial, sans-serif; background: #1e2329; color: #e8e8e8; margin: 0; padding: 16px; }
+  h1   { font-size: 22px; margin: 0 0 4px; }
+  .sub { color: #9aa4ae; margin-bottom: 16px; font-size: 14px; }
+  .grilla { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; }
+  .panel { background: #2a3038; border-radius: 8px; padding: 16px; }
+  .panel h2 { font-size: 15px; margin: 0 0 12px; color: #9aa4ae; text-transform: uppercase; }
+
+  /* Indicadores tipo "luz piloto" */
+  .fila { display: flex; align-items: center; gap: 10px; margin: 8px 0; }
+  .led  { width: 22px; height: 22px; border-radius: 50%; background: #444; border: 2px solid #222; }
+  .led.verde { background: #2ecc71; box-shadow: 0 0 10px #2ecc71; }
+  .led.rojo  { background: #e74c3c; box-shadow: 0 0 10px #e74c3c; }
+  .led.amarillo { background: #f1c40f; box-shadow: 0 0 10px #f1c40f; }
+
+  /* Tanque */
+  .tanque { position: relative; width: 120px; height: 200px; border: 3px solid #9aa4ae;
+            border-top: none; margin: 0 auto; background: #15191d; }
+  .agua   { position: absolute; bottom: 0; width: 100%; background: #3498db; transition: height .4s; }
+  .marca  { position: absolute; left: -8px; right: -8px; border-top: 2px dashed #f1c40f; }
+  .valor-grande { font-size: 32px; font-weight: bold; text-align: center; margin-top: 8px; }
+
+  button { font-size: 16px; padding: 12px 18px; border: none; border-radius: 6px;
+           cursor: pointer; color: white; margin: 4px 4px 4px 0; }
+  .b-marcha { background: #27ae60; }
+  .b-parada { background: #c0392b; }
+  .b-reset  { background: #7f8c8d; }
+  input[type=number] { font-size: 16px; width: 80px; padding: 8px; }
+
+  .estado-con { padding: 4px 10px; border-radius: 4px; font-size: 13px; }
+  .ok   { background: #27ae60; }
+  .mal  { background: #c0392b; }
+  pre   { background: #15191d; padding: 10px; border-radius: 6px; font-size: 12px; overflow-x: auto; }
+</style>
+</head>
+
+<!-- ====================== 2) PANTALLA ====================== -->
+<body>
+  <h1>Control de tanque &mdash; S7-1200</h1>
+  <div class="sub">
+    DB1 "DB_IoT" &nbsp;|&nbsp; Comunicación:
+    <span id="estadoConexion" class="estado-con mal">sin datos</span>
+  </div>
+
+  <div class="grilla">
+
+    <!-- ---------- MONITOREO: variables BOOL ---------- -->
+    <div class="panel">
+      <h2>Estado (PLC &rarr; Web)</h2>
+      <div class="fila"><div class="led" id="ledBomba"></div>    Bomba en marcha   <small>(DBX0.0)</small></div>
+      <div class="fila"><div class="led" id="ledAlarma"></div>   Alarma            <small>(DBX0.1)</small></div>
+      <div class="fila"><div class="led" id="ledNivelAlto"></div> Nivel alto       <small>(DBX0.2)</small></div>
+      <hr style="border-color:#3a414a">
+      <div class="fila">Ciclos de llenado: <b id="txtContador">-</b> <small>(DBW4)</small></div>
+      <div class="fila">Entrada analógica AI0: <b id="txtAnalogica">-</b> <small>(DBW6)</small></div>
+    </div>
+
+    <!-- ---------- MONITOREO: variable INT como gráfico ---------- -->
+    <div class="panel">
+      <h2>Nivel del tanque (DBW2)</h2>
+      <div class="tanque">
+        <div class="agua"  id="agua" style="height:0%"></div>
+        <div class="marca" id="marcaSetpoint" style="bottom:70%"></div>
+      </div>
+      <div class="valor-grande"><span id="txtNivel">-</span> %</div>
+    </div>
+
+    <!-- ---------- CONTROL: Web -> PLC ---------- -->
+    <div class="panel">
+      <h2>Comandos (Web &rarr; PLC)</h2>
+      <!-- onclick="..." llama a una función del <script> al hacer clic -->
+      <button class="b-marcha" onclick="escribir('web_marcha', true)">MARCHA</button>
+      <button class="b-parada" onclick="escribir('web_parada', true)">PARADA</button>
+      <button class="b-reset"  onclick="escribir('web_reset',  true)">RESET ALARMA</button>
+      <hr style="border-color:#3a414a">
+      <div class="fila">
+        Setpoint de nivel:
+        <input type="number" id="inSetpoint" min="0" max="100" value="70"> %
+        <button class="b-reset" onclick="enviarSetpoint()">Enviar</button>
+      </div>
+      <small>Setpoint actual en el PLC: <b id="txtSetpoint">-</b> % (DBW10)</small>
+    </div>
+
+    <!-- ---------- PARA LA CLASE: ver los datos crudos ---------- -->
+    <div class="panel">
+      <h2>Datos crudos recibidos</h2>
+      <small>Bytes del DB1 (0 a 11), tal como vienen del PLC:</small>
+      <pre id="txtBytes">-</pre>
+      <small>JSON que entrega servidor.py:</small>
+      <pre id="txtJson">-</pre>
+    </div>
+
+  </div>
+
+<!-- ====================== 3) PROGRAMA ====================== -->
+<script>
+// JavaScript se parece bastante a C: if, for, while, funciones, { } y ;
+// La gran diferencia: las variables se declaran con "let" o "const"
+// sin indicar tipo (int, char...). El tipo lo decide el valor.
+
+const PERIODO_MS = 500;   // cada cuánto se consulta al PLC (como un "scan")
+
+
+// ------------------------------------------------------------------
+// LECTURA: pide el estado del DB al servidor y actualiza la pantalla
+// ------------------------------------------------------------------
+async function leerPLC() {
+  try {
+    // >>> AQUÍ SE PIDEN LOS DATOS DEL DB <<<
+    // fetch() hace un pedido HTTP. "await" espera la respuesta
+    // (parecido a quedarse esperando un dato por UART).
+    const respuesta = await fetch("/api/estado");
+    const db = await respuesta.json();   // texto JSON -> objeto
+
+    if (!db.conectado) {
+      mostrarConexion(false, db.error);
+      return;
+    }
+    mostrarConexion(true);
+
+    // --- Variables BOOL -> encender / apagar "LEDs" ---
+    ponerLed("ledBomba",     db.bomba_marcha, "verde");
+    ponerLed("ledAlarma",    db.alarma,       "rojo");
+    ponerLed("ledNivelAlto", db.nivel_alto,   "amarillo");
+
+    // --- Variables INT -> mostrar números ---
+    document.getElementById("txtNivel").textContent     = db.nivel;
+    document.getElementById("txtContador").textContent  = db.contador;
+    document.getElementById("txtAnalogica").textContent = db.analogica_ai0;
+    document.getElementById("txtSetpoint").textContent  = db.web_setpoint;
+
+    // --- INT -> altura del agua en el dibujo del tanque ---
+    document.getElementById("agua").style.height          = limitar(db.nivel, 0, 100) + "%";
+    document.getElementById("marcaSetpoint").style.bottom = limitar(db.web_setpoint, 0, 100) + "%";
+
+    // --- Datos crudos (para la explicación en clase) ---
+    document.getElementById("txtBytes").textContent =
+      db.bytes_crudos.map((b, i) => "byte " + i + ": " + b.toString(2).padStart(8, "0") + "  (" + b + ")").join("\n");
+    delete db.bytes_crudos;
+    document.getElementById("txtJson").textContent = JSON.stringify(db, null, 2);
+
+  } catch (error) {
+    mostrarConexion(false, "servidor.py no responde");
+  }
+}
+
+
+// ------------------------------------------------------------------
+// ESCRITURA: manda un valor a una variable del DB
+//   nombre: "web_marcha", "web_parada", "web_reset" o "web_setpoint"
+//   valor : true/false para BOOL, número para INT
+// ------------------------------------------------------------------
+async function escribir(nombre, valor) {
+  // >>> AQUÍ SE ENVÍA EL DATO HACIA EL DB <<<
+  const respuesta = await fetch("/api/escribir", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ nombre: nombre, valor: valor })
+  });
+  const resultado = await respuesta.json();
+  if (!resultado.ok) {
+    alert("No se pudo escribir: " + resultado.error);
+  }
+}
+
+function enviarSetpoint() {
+  const valor = parseInt(document.getElementById("inSetpoint").value);
+  if (isNaN(valor) || valor < 0 || valor > 100) {
+    alert("El setpoint debe estar entre 0 y 100 %");
+    return;
+  }
+  escribir("web_setpoint", valor);
+}
+
+
+// ------------------------------------------------------------------
+// Funciones auxiliares
+// ------------------------------------------------------------------
+function ponerLed(id, encendido, color) {
+  const led = document.getElementById(id);
+  led.className = encendido ? "led " + color : "led";
+}
+
+function mostrarConexion(ok, error) {
+  const e = document.getElementById("estadoConexion");
+  e.className = "estado-con " + (ok ? "ok" : "mal");
+  e.textContent = ok ? "conectado" : "SIN CONEXIÓN: " + (error || "");
+}
+
+function limitar(x, min, max) {
+  return Math.max(min, Math.min(max, x));
+}
+
+
+// ------------------------------------------------------------------
+// "main": arranca la lectura periódica (como un timer en un micro)
+// ------------------------------------------------------------------
+leerPLC();
+setInterval(leerPLC, PERIODO_MS);
+</script>
+</body>
+</html>

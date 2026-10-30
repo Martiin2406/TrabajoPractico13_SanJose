@@ -1,0 +1,79 @@
+// =====================================================================
+//  TP Automatización Industrial - PLC S7-1200 + IoT
+//  OB1 "Main" en lenguaje SCL (similar a C / Pascal)
+//
+//  Requisitos en TIA Portal:
+//   - DB1 "DB_IoT" con ACCESO ESTÁNDAR (ver tabla en GUIA_TP.md)
+//   - Propiedades de la CPU -> "Marcas de sistema y de ciclo":
+//       activar "Marcas de ciclo" en el byte MB0
+//       -> %M0.5 = 1 Hz  (lo usamos como "reloj" del proceso)
+//   - %M10.0 se usa como memoria auxiliar para detectar el flanco.
+//
+//  Proceso simulado: una bomba llena un tanque.
+//   - Con bomba en marcha el nivel sube 2 % por segundo.
+//   - Con bomba parada el nivel baja 1 % por segundo (consumo).
+//   - Al llegar al setpoint la bomba se detiene y cuenta un ciclo.
+//   - Si el nivel llega a 95 % se activa la ALARMA (enclavada).
+// =====================================================================
+
+// ---------- 1) Entrada analógica integrada de la CPU ----------
+// 0..10 V  ->  0..27648. Conectar un potenciómetro para probar.
+"DB_IoT".Analogica_AI0 := %IW64;
+
+// ---------- 2) Comandos que llegan desde la WEB ----------
+// La web pone el bit en TRUE. El PLC lo usa y lo vuelve a FALSE.
+// Así se comporta como un pulsador (un solo pulso por clic).
+IF "DB_IoT".Web_Marcha THEN
+    IF NOT "DB_IoT".Alarma THEN
+        "DB_IoT".Bomba_Marcha := TRUE;
+    END_IF;
+    "DB_IoT".Web_Marcha := FALSE;
+END_IF;
+
+IF "DB_IoT".Web_Parada THEN
+    "DB_IoT".Bomba_Marcha := FALSE;
+    "DB_IoT".Web_Parada := FALSE;
+END_IF;
+
+IF "DB_IoT".Web_Reset THEN
+    IF "DB_IoT".Nivel < 90 THEN
+        "DB_IoT".Alarma := FALSE;
+    END_IF;
+    "DB_IoT".Web_Reset := FALSE;
+END_IF;
+
+// Nunca confiar en un dato externo: limitar el setpoint.
+// (Ojo: con setpoint > 95 el tanque llega a la alarma. ¡Probarlo!)
+IF "DB_IoT".Web_Setpoint > 100 THEN
+    "DB_IoT".Web_Setpoint := 100;
+ELSIF "DB_IoT".Web_Setpoint < 0 THEN
+    "DB_IoT".Web_Setpoint := 0;
+END_IF;
+
+// ---------- 3) Proceso: se ejecuta una vez por segundo ----------
+// Flanco ascendente de la marca de 1 Hz (%M0.5)
+IF %M0.5 AND NOT %M10.0 THEN
+
+    IF "DB_IoT".Bomba_Marcha THEN
+        "DB_IoT".Nivel := "DB_IoT".Nivel + 2;
+        IF "DB_IoT".Nivel >= "DB_IoT".Web_Setpoint THEN
+            "DB_IoT".Bomba_Marcha := FALSE;
+            "DB_IoT".Contador_Ciclos := "DB_IoT".Contador_Ciclos + 1;
+        END_IF;
+    ELSIF "DB_IoT".Nivel > 0 THEN
+        "DB_IoT".Nivel := "DB_IoT".Nivel - 1;
+    END_IF;
+
+END_IF;
+%M10.0 := %M0.5;
+
+// ---------- 4) Alarmas ----------
+IF "DB_IoT".Nivel >= 95 THEN
+    "DB_IoT".Alarma := TRUE;
+    "DB_IoT".Bomba_Marcha := FALSE;
+END_IF;
+"DB_IoT".Nivel_Alto := "DB_IoT".Nivel >= 90;
+
+// ---------- 5) Salidas físicas ----------
+%Q0.0 := "DB_IoT".Bomba_Marcha;   // contactor de la bomba / LED
+%Q0.1 := "DB_IoT".Alarma;         // baliza de alarma
